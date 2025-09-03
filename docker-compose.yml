@@ -1,0 +1,76 @@
+services:
+  code:
+    image: lscr.io/linuxserver/code-server:4.101.1
+    container_name: code
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: "America/Toronto"
+      # IMPORTANT: Disable built-in auth; GitHub SSO handles it.
+      # (LinuxServer image reads these flags from env)
+      PASSWORD: ""       # leave empty
+    command:
+      - /usr/bin/code-server
+      - /config/workspace
+      - --auth
+      - none
+      - --bind-addr
+      - 0.0.0.0:8443
+    volumes:
+      - code-config:/config
+      - projects:/config/workspace
+    restart: unless-stopped
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.6.0
+    container_name: oauth2-proxy
+    environment:
+      OAUTH2_PROXY_PROVIDER: github
+      OAUTH2_PROXY_CLIENT_ID: ${OAUTH2_PROXY_CLIENT_ID}
+      OAUTH2_PROXY_CLIENT_SECRET: ${OAUTH2_PROXY_CLIENT_SECRET}
+      OAUTH2_PROXY_COOKIE_SECRET: ${OAUTH2_PROXY_COOKIE_SECRET}
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"                 # or restrict
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"           # expose X-Auth-Request-* headers
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"          # <-- we need this
+      OAUTH2_PROXY_WHITELIST_DOMAINS: ${PUBLIC_HOST}  # e.g. codeserver.example.com
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: lax
+      OAUTH2_PROXY_COOKIE_NAME: _oauth2_proxy_cs
+      OAUTH2_PROXY_HTTP_ADDRESS: 0.0.0.0:4180
+      OAUTH2_PROXY_SCOPE: "read:user repo"
+      # Optional: restrict by org/team
+      # OAUTH2_PROXY_GITHUB_ORG: flyerforward
+      # OAUTH2_PROXY_GITHUB_TEAM: flyerforward:devs
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    depends_on:
+      - oauth2-proxy
+      - code
+      - bootstrap
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8443:443"   # change to 443 if you terminate TLS here
+    restart: unless-stopped
+
+  bootstrap:
+    build:
+      context: ./bootstrap
+    container_name: bootstrap
+    environment:
+      WORKSPACE_DIR: /workspace
+      INCLUDE_FORKS: "${INCLUDE_FORKS:-0}"
+      INCLUDE_ARCHIVED: "${INCLUDE_ARCHIVED:-0}"
+      OWNER_ALLOWLIST: "${OWNER_ALLOWLIST:-}"   # optional: "org1,org2"
+      DEV_GIT_EMAIL: "${DEV_GH_EMAIL}"          # author email for git config
+      DEV_GIT_NAME: "${DEV_GH_USERNAME}"        # author name for git config (username)
+    volumes:
+      - projects:/workspace
+    restart: unless-stopped
+
+volumes:
+  code-config: {}
+  projects: {}
